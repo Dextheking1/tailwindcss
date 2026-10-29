@@ -158,6 +158,15 @@ describe('is-safe-migration', async () => {
     // Dashed candidates inside comments after JSX are not class names
     ['<div>{/* shadow-sm */}</div>', 'shadow-sm'],
     ['const node = <div></div>; // use shadow-sm', 'shadow-sm'],
+
+    // A multiline block comment inside a `variant` value does not end
+    // the value: the strings after it are still variant names
+    [`<Button variant={active /*\n * Choose the button style.\n */ ? "outline" : "ghost"} />`, 'outline'],
+
+    // Closing tags of components whose names start with `_` or `$` are
+    // not regexes: a comment after them is still a comment
+    ['const node = <_Button></_Button>; // use shadow-sm', 'shadow-sm'],
+    ['const node = <$Button></$Button>; // use shadow-sm', 'shadow-sm'],
   ])('does not replace classes in invalid positions #%#', async (example, candidate) => {
     expect(
       await migrateCandidate(designSystem, {}, candidate, {
@@ -251,6 +260,10 @@ describe('is-safe-migration', async () => {
     // A regex right after a `<` comparison is not a JSX closing tag:
     // the class after it still migrates
     ['const match = value</[/*]/.test(input); const classes = "shadow-sm"', 'shadow-sm', 'shadow-xs'],
+
+    // An escaped quote inside a regex literal does not open a string:
+    // the class after it still migrates
+    ['const re = /\\"/; <div className="shadow" />', 'shadow', 'shadow-sm'],
   ])('replaces classes in valid positions #%#', async (example, candidate, expected) => {
     expect(
       await migrateCandidate(designSystem, {}, candidate, {
