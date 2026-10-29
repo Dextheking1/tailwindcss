@@ -110,6 +110,48 @@ function isInsideVariantValue(prefix: string): boolean {
   // brace, semicolon, or a new assignment means the variant value ended
   // before the candidate.
   let tail = prefix.slice(match.index + match[0].length)
+
+  // Blank comments out first (keeping newlines, so the line structure
+  // survives): comment text is not part of the expression, and a `/` from
+  // a comment must not be read as a division operator that continues the
+  // value onto the next line. Each branch leaves `i` on its last consumed
+  // character, so the loop increment moves to the next one.
+  let cleaned = ''
+  for (let i = 0; i < tail.length; i++) {
+    let char = tail[i]
+
+    if (char === '"' || char === "'" || char === '`') {
+      let start = i
+      i++
+      while (i < tail.length && tail[i] !== char) {
+        if (tail[i] === '\\') i++
+        i++
+      }
+      cleaned += tail.slice(start, i + 1)
+      continue
+    }
+
+    if (char === '/' && tail[i + 1] === '*') {
+      i += 2
+      while (i < tail.length && !(tail[i] === '*' && tail[i + 1] === '/')) {
+        if (tail[i] === '\n') cleaned += '\n'
+        i++
+      }
+      i += 1
+      cleaned += ' '
+      continue
+    }
+
+    if (char === '/' && tail[i + 1] === '/' && tail[i - 1] !== ':') {
+      while (i < tail.length && tail[i] !== '\n') i++
+      cleaned += ' '
+      if (tail[i] === '\n') cleaned += '\n'
+      continue
+    }
+
+    cleaned += char
+  }
+  tail = cleaned
   let depth = 0
   let i = 0
   while (i < tail.length) {
@@ -456,7 +498,8 @@ const commentRanges = new DefaultMap((source: string) => {
     }
 
     // Skip regular expression literals (block comments are handled
-    // above, and `</` is a JSX closing tag, never a regex): the escaped slash and the
+    // above, and `</` followed by a tag name is a JSX closing tag, not a
+    // regex): the escaped slash and the
     // closing slash in `/\\//` are not a comment start. A `/` only opens
     // a regex in expression position; after an operand (identifier,
     // number, `)`, `]`, a string) it is division instead. Keywords such
@@ -465,7 +508,8 @@ const commentRanges = new DefaultMap((source: string) => {
       let j = i - 1
       while (j >= 0 && (source[j] === ' ' || source[j] === '\t')) j--
       let prev = source[j] ?? ''
-      let isRegex = source[i - 1] !== '<' && !/[A-Za-z0-9_$)\]}'"`]/.test(prev)
+      let isClosingTag = source[i - 1] === '<' && /[A-Za-z>]/.test(source[i + 1] ?? '')
+      let isRegex = !isClosingTag && !/[A-Za-z0-9_$)\]}'"`]/.test(prev)
       if (!isRegex && /[A-Za-z_$]/.test(prev)) {
         let k = j
         while (k >= 0 && /[A-Za-z0-9_$]/.test(source[k])) k--
