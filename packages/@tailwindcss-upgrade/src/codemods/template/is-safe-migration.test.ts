@@ -146,6 +146,10 @@ describe('is-safe-migration', async () => {
 
     // A string compared against `variant` is a variant name, not a class
     [`const isOutline = variant === "outline"`, 'outline'],
+
+    // A quote inside a comment does not open a string: the `variant`
+    // prop after it still protects its values
+    ['// Template literals use the ` character.\n<Button variant={active ? "outline" : "ghost"} />', 'outline'],
   ])('does not replace classes in invalid positions #%#', async (example, candidate) => {
     expect(
       await migrateCandidate(designSystem, {}, candidate, {
@@ -202,6 +206,26 @@ describe('is-safe-migration', async () => {
       `<img srcset="\nhttps://example.com/image.png 1x" class="outline">`,
       'outline',
       'outline-solid',
+    ],
+
+    // A semicolon-free `variant` assignment ends at the newline: a class
+    // in the next statement still migrates
+    [
+      'const variant = props.variant ?? "primary"\nreturn cn("outline")',
+      'outline',
+      'outline-solid',
+    ],
+
+    // A regular expression literal is not a comment: the class after it
+    // still migrates
+    ['const slash = /\\\\//; const classes = "shadow-sm"', 'shadow-sm', 'shadow-xs'],
+
+    // A cva `variant: { … }` object holds class names, not variant
+    // values: they still migrate
+    [
+      'const buttonVariants = cva("", { variants: { variant: { default: "bg-primary shadow" } } })',
+      'shadow',
+      'shadow-sm',
     ],
   ])('replaces classes in valid positions #%#', async (example, candidate, expected) => {
     expect(
