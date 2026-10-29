@@ -20,19 +20,68 @@ const CONDITIONAL_TEMPLATE_SYNTAX = [
 const NEXT_PLACEHOLDER_PROP = /placeholder=\{?['"`]$/
 const VUE_3_EMIT = /\b\$?emit\(['"`]$/
 
+// Whether the position `index` in `text` sits inside a string literal.
+// Single and double quoted strings end at a newline, so an apostrophe in
+// text (e.g. `Don't`) does not open a string that runs to a quote on a
+// later line. Attribute values (`srcset="…"`) and template literals may
+// span lines.
+function isInsideStringLiteral(text: string, index: number): boolean {
+  let quote: string | null = null
+  let spansLines = false
+
+  for (let i = 0; i < index; i++) {
+    let char = text[i]
+
+    if (quote !== null) {
+      if (char === '\\') {
+        i++
+      } else if (char === quote) {
+        quote = null
+      } else if (char === '\n' && !spansLines) {
+        quote = null
+      }
+      continue
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char
+      spansLines = char === '`'
+      if (!spansLines) {
+        let j = i - 1
+        while (j >= 0 && (text[j] === ' ' || text[j] === '\t')) j--
+        spansLines = text[j] === '='
+      }
+    }
+  }
+
+  return quote !== null
+}
+
 // shadcn/ui style `variant` props can hold arbitrary expressions, e.g.
 // `variant={isActive ? "outline" : "ghost"}` or
 // `Button({ variant: isActive ? "outline" : "ghost" })`.
 // The strings inside are variant names, not class names, so candidates
 // found there must not be migrated.
-function isInsideVariantValue(line: string): boolean {
-  // Find the last `variant` prop assignment on the line. The `=` must be a
-  // real assignment: `==`, `===` and `=>` are comparisons, not assignments,
-  // e.g. `cn(variant === "primary" && "outline")` holds a class name.
+function isInsideVariantValue(prefix: string): boolean {
+  // A comparison against `variant` is not an assignment, but the compared
+  // string is still a variant name, not a class name:
+  // `variant === "outline"`.
+  if (/\bvariant\s*(?:===|!==|==|!=)\s*['"`]$/.test(prefix)) {
+    return true
+  }
+
+  // Find the last `variant` prop assignment before the candidate. The
+  // prefix may span multiple lines when the value expression does. The
+  // `=` must be a real assignment: `==`, `===` and `=>` are comparisons,
+  // not assignments, e.g. `cn(variant === "primary" && "outline")` holds
+  // a class name.
   let pattern = /variant\s*(?::|=(?![=>]))\s*\{?/g
   let match: RegExpExecArray | null = null
   let current: RegExpExecArray | null
-  while ((current = pattern.exec(line)) !== null) {
+  while ((current = pattern.exec(prefix)) !== null) {
+    // Ignore `variant` inside a string literal, e.g. the query string in
+    // `href="/?variant=primary"` is not a prop assignment.
+    if (isInsideStringLiteral(prefix, current.index)) continue
     match = current
   }
   if (match === null) return false
@@ -41,7 +90,7 @@ function isInsideVariantValue(line: string): boolean {
   // and expression characters may appear, but a top-level comma, closing
   // brace, semicolon, or a new assignment means the variant value ended
   // before the candidate.
-  let tail = line.slice(match.index + match[0].length)
+  let tail = prefix.slice(match.index + match[0].length)
   let depth = 0
   let i = 0
   while (i < tail.length) {
@@ -175,6 +224,25 @@ export function isSafeMigration(
     }
   }
 
+  // Heuristic: Disallow candidates inside comments (`//` and `/* */`).
+  // Comment prose is not a class name, e.g.:
+  // `// this comment mentions `outline: none` as CSS prose`
+  // This check has to run before the parsed-candidate early returns below:
+  // a dashed candidate like `shadow-sm` in a comment would otherwise look
+  // safe and return early.
+  {
+    let ranges = commentRanges.get(location.contents)
+
+    for (let i = 0; i < ranges.length; i += 2) {
+      let start = ranges[i]
+      let end = ranges[i + 1]
+
+      if (location.start >= start && location.end <= end) {
+        return false
+      }
+    }
+  }
+
   let [candidate] = parseCandidate(rawCandidate, designSystem)
 
   // If we can't parse the candidate, then it's not a candidate at all. However,
@@ -232,8 +300,10 @@ export function isSafeMigration(
     }
   }
 
-  // Heuristic: Require the candidate to be inside quotes
-  let isQuoteBeforeCandidate = isMiddleOfString(currentLineBeforeCandidate)
+  // Heuristic: Require the candidate to be inside quotes. The opening
+  // quote can sit on an earlier line when a string or attribute value
+  // spans lines, so the before state is computed over the whole prefix.
+  let isQuoteBeforeCandidate = isInsideStringLiteral(location.contents, location.start)
   let isQuoteAfterCandidate = isMiddleOfString(currentLineAfterCandidate)
   if (!isQuoteBeforeCandidate || !isQuoteAfterCandidate) {
     return false
@@ -268,25 +338,11 @@ export function isSafeMigration(
 
   // Heuristic: Disallow candidates inside a `variant` prop value, e.g.
   // `variant={isActive ? "outline" : "ghost"}`. The strings there are variant
-  // names, not class names, no matter what expression they sit inside.
-  if (isInsideVariantValue(currentLineBeforeCandidate)) {
+  // names, not class names, no matter what expression they sit inside. The
+  // value expression can span multiple lines, so scan the whole prefix
+  // before the candidate, not just its line.
+  if (isInsideVariantValue(location.contents.slice(0, location.start))) {
     return false
-  }
-
-  // Heuristic: Disallow candidates inside comments (`//` and `/* */`).
-  // Comment prose is not a class name, e.g.:
-  // `// this comment mentions `outline: none` as CSS prose`
-  {
-    let ranges = commentRanges.get(location.contents)
-
-    for (let i = 0; i < ranges.length; i += 2) {
-      let start = ranges[i]
-      let end = ranges[i + 1]
-
-      if (location.start >= start && location.end <= end) {
-        return false
-      }
-    }
   }
 
   // Heuristic: Disallow Next.js Image `placeholder` prop
@@ -313,13 +369,19 @@ const commentRanges = new DefaultMap((source: string) => {
     let char = source[i]
 
     // Skip string literals. Single and double quoted strings cannot span
-    // lines, so they end at a newline; only template literals may span
-    // lines. Otherwise an apostrophe in JSX text (e.g. `Don't`) would open
-    // a string that runs to a quote on a later line, and comment markers
-    // after it would be misread.
+    // lines, so they end at a newline; only template literals and
+    // attribute values may span lines. Otherwise an apostrophe in JSX
+    // text (e.g. `Don't`) would open a string that runs to a quote on a
+    // later line, and comment markers after it would be misread.
     if (char === '"' || char === "'" || char === '`') {
+      let spansLines = char === '`'
+      if (!spansLines) {
+        let j = i - 1
+        while (j >= 0 && (source[j] === ' ' || source[j] === '\t')) j--
+        spansLines = source[j] === '='
+      }
       i++
-      while (i < source.length && source[i] !== char && (char === '`' || source[i] !== '\n')) {
+      while (i < source.length && source[i] !== char && (spansLines || source[i] !== '\n')) {
         if (source[i] === '\\') i++
         i++
       }
@@ -327,8 +389,9 @@ const commentRanges = new DefaultMap((source: string) => {
       continue
     }
 
-    // Line comment: runs until the end of the line
-    if (char === '/' && source[i + 1] === '/') {
+    // Line comment: runs until the end of the line. A `//` right after a
+    // `:` is a URL in text (e.g. `https://example.com`), not a comment.
+    if (char === '/' && source[i + 1] === '/' && source[i - 1] !== ':') {
       let start = i
       while (i < source.length && source[i] !== '\n') i++
       ranges.push(start, i)
