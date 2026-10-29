@@ -135,6 +135,17 @@ describe('is-safe-migration', async () => {
     ['// this comment mentions `outline: none` as CSS prose', 'outline'],
     ['/* this comment mentions `outline: none` as CSS prose */', 'outline'],
     ['<div>{/* this comment mentions `outline: none` as CSS prose */}</div>', 'outline'],
+
+    // A dashed candidate inside a comment is not a class name either
+    ['// use `shadow-sm` for the small shadow', 'shadow-sm'],
+
+    // A `variant` value expression can span multiple lines: the strings
+    // inside it are still variant names, not class names
+    [`<Button variant={\n  active ? "outline" : "ghost"\n} />`, 'outline'],
+    [`<Button variant={active ? "outline" :\n  "ghost"} />`, 'ghost'],
+
+    // A string compared against `variant` is a variant name, not a class
+    [`const isOutline = variant === "outline"`, 'outline'],
   ])('does not replace classes in invalid positions #%#', async (example, candidate) => {
     expect(
       await migrateCandidate(designSystem, {}, candidate, {
@@ -174,6 +185,21 @@ describe('is-safe-migration', async () => {
     // later line still migrates, and the `//` in the URL stays a string
     [
       `<p>Don't</p>\n<a href='https://example.com' className="outline" />`,
+      'outline',
+      'outline-solid',
+    ],
+
+    // A URL in HTML text is not a comment: the class after it migrates
+    [`<p>https://example.com</p><div class="outline"></div>`, 'outline', 'outline-solid'],
+
+    // `variant` inside a query string is not a prop assignment: the
+    // class after it migrates
+    [`<a href="/?variant=primary" class="outline">`, 'outline', 'outline-solid'],
+
+    // An attribute value can span lines: the URL inside it is not a
+    // comment, and the class after it migrates
+    [
+      `<img srcset="\nhttps://example.com/image.png 1x" class="outline">`,
       'outline',
       'outline-solid',
     ],
