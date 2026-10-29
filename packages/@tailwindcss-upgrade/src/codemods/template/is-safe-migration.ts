@@ -26,8 +26,10 @@ const VUE_3_EMIT = /\b\$?emit\(['"`]$/
 // The strings inside are variant names, not class names, so candidates
 // found there must not be migrated.
 function isInsideVariantValue(line: string): boolean {
-  // Find the last `variant` prop assignment on the line
-  let pattern = /variant\s*[:=]\s*\{?/g
+  // Find the last `variant` prop assignment on the line. The `=` must be a
+  // real assignment: `==`, `===` and `=>` are comparisons, not assignments,
+  // e.g. `cn(variant === "primary" && "outline")` holds a class name.
+  let pattern = /variant\s*(?::|=(?![=>]))\s*\{?/g
   let match: RegExpExecArray | null = null
   let current: RegExpExecArray | null
   while ((current = pattern.exec(line)) !== null) {
@@ -310,10 +312,14 @@ const commentRanges = new DefaultMap((source: string) => {
   while (i < source.length) {
     let char = source[i]
 
-    // Skip string literals
+    // Skip string literals. Single and double quoted strings cannot span
+    // lines, so they end at a newline; only template literals may span
+    // lines. Otherwise an apostrophe in JSX text (e.g. `Don't`) would open
+    // a string that runs to a quote on a later line, and comment markers
+    // after it would be misread.
     if (char === '"' || char === "'" || char === '`') {
       i++
-      while (i < source.length && source[i] !== char) {
+      while (i < source.length && source[i] !== char && (char === '`' || source[i] !== '\n')) {
         if (source[i] === '\\') i++
         i++
       }
