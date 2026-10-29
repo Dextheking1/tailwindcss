@@ -164,6 +164,19 @@ describe('is-safe-migration', async () => {
     // https://github.com/tailwindlabs/tailwindcss/issues/20435
     [`<Button variant="primary" className="outline" />`, 'outline', 'outline-solid'],
     [`Button({ variant: "primary", className: "outline" })`, 'outline', 'outline-solid'],
+
+    // A comparison against `variant` is not a `variant` prop assignment:
+    // the class composed next to it still migrates
+    [`cn(variant === "primary" && "outline")`, 'outline', 'outline-solid'],
+    [`cn(variant == "primary" && "outline")`, 'outline', 'outline-solid'],
+
+    // An apostrophe in JSX text does not open a string: the class on a
+    // later line still migrates, and the `//` in the URL stays a string
+    [
+      `<p>Don't</p>\n<a href='https://example.com' className="outline" />`,
+      'outline',
+      'outline-solid',
+    ],
   ])('replaces classes in valid positions #%#', async (example, candidate, expected) => {
     expect(
       await migrateCandidate(designSystem, {}, candidate, {
