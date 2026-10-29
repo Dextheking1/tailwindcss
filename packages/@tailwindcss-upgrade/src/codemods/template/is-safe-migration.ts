@@ -54,7 +54,9 @@ function isInsideStringLiteral(text: string, index: number): boolean {
     if (char === '/' && text[i + 1] === '*') {
       i += 2
       while (i < index && !(text[i] === '*' && text[i + 1] === '/')) i++
-      i += 2
+      // Land on the closing slash; the loop increment moves past it, so
+      // the character after the comment is read normally.
+      i += 1
       continue
     }
 
@@ -145,7 +147,8 @@ function isInsideVariantValue(prefix: string): boolean {
 
     // A newline at the top level ends the value, unless the expression
     // continues on the next line: a trailing operator (`?`, `:`, `&&`, …)
-    // or a leading `.`, `?` or `:` on the next line means it continues.
+    // or a leading operator (`.`, `?`, `:`, `>`, …) on the next line
+    // means it continues.
     // Without this, a semicolon-free assignment would protect strings in
     // later statements: `const variant = props.variant ?? "primary"`
     // followed by `return cn("outline")` on the next line.
@@ -164,7 +167,7 @@ function isInsideVariantValue(prefix: string): boolean {
       let continues =
         prev < 0 ||
         '?.,:+&|!<>=%~^*/-'.includes(tail[prev]) ||
-        (next < tail.length && '.?:&|+'.includes(tail[next]))
+        (next < tail.length && '.?:&|+-*/%<>='.includes(tail[next]))
       if (!continues) return false
       i++
       continue
@@ -442,7 +445,18 @@ const commentRanges = new DefaultMap((source: string) => {
       continue
     }
 
-    // Skip regular expression literals: the escaped slash and the
+    // Block comment: runs until the closing `*/`
+    if (char === '/' && source[i + 1] === '*') {
+      let start = i
+      i += 2
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++
+      i += 2
+      ranges.push(start, Math.min(i, source.length))
+      continue
+    }
+
+    // Skip regular expression literals (block comments are handled
+    // above, and `</` is a JSX closing tag, never a regex): the escaped slash and the
     // closing slash in `/\\//` are not a comment start. A `/` only opens
     // a regex in expression position; after an operand (identifier,
     // number, `)`, `]`, a string) it is division instead. Keywords such
@@ -451,7 +465,7 @@ const commentRanges = new DefaultMap((source: string) => {
       let j = i - 1
       while (j >= 0 && (source[j] === ' ' || source[j] === '\t')) j--
       let prev = source[j] ?? ''
-      let isRegex = !/[A-Za-z0-9_$)\]}'"`]/.test(prev)
+      let isRegex = source[i - 1] !== '<' && !/[A-Za-z0-9_$)\]}'"`]/.test(prev)
       if (!isRegex && /[A-Za-z_$]/.test(prev)) {
         let k = j
         while (k >= 0 && /[A-Za-z0-9_$]/.test(source[k])) k--
@@ -488,16 +502,6 @@ const commentRanges = new DefaultMap((source: string) => {
         }
         continue
       }
-    }
-
-    // Block comment: runs until the closing `*/`
-    if (char === '/' && source[i + 1] === '*') {
-      let start = i
-      i += 2
-      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++
-      i += 2
-      ranges.push(start, Math.min(i, source.length))
-      continue
     }
 
     i++
