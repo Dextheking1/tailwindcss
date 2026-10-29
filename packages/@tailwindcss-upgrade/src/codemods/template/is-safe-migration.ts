@@ -43,6 +43,21 @@ function isInsideStringLiteral(text: string, index: number): boolean {
       continue
     }
 
+    // Skip comments: quotes in comment prose do not open strings, e.g.
+    // the backtick in `// Template literals use the \` character.`
+    // would otherwise swallow the rest of the file as a string. A `//`
+    // right after a `:` is a URL in text, not a comment.
+    if (char === '/' && text[i + 1] === '/' && text[i - 1] !== ':') {
+      while (i < index && text[i] !== '\n') i++
+      continue
+    }
+    if (char === '/' && text[i + 1] === '*') {
+      i += 2
+      while (i < index && !(text[i] === '*' && text[i + 1] === '/')) i++
+      i += 2
+      continue
+    }
+
     if (char === '"' || char === "'" || char === '`') {
       quote = char
       spansLines = char === '`'
@@ -74,8 +89,10 @@ function isInsideVariantValue(prefix: string): boolean {
   // prefix may span multiple lines when the value expression does. The
   // `=` must be a real assignment: `==`, `===` and `=>` are comparisons,
   // not assignments, e.g. `cn(variant === "primary" && "outline")` holds
-  // a class name.
-  let pattern = /variant\s*(?::|=(?![=>]))\s*\{?/g
+  // a class name. A `{` right after the colon opens a cva variants
+  // object (`variant: { default: "…" }`), whose values are class names,
+  // so that is not a variant value either.
+  let pattern = /variant\s*(?::(?!\s*\{)|=(?![=>]))\s*\{?/g
   let match: RegExpExecArray | null = null
   let current: RegExpExecArray | null
   while ((current = pattern.exec(prefix)) !== null) {
@@ -122,6 +139,33 @@ function isInsideVariantValue(prefix: string): boolean {
 
     if (char === ',' || char === ';') {
       if (depth === 0) return false
+      i++
+      continue
+    }
+
+    // A newline at the top level ends the value, unless the expression
+    // continues on the next line: a trailing operator (`?`, `:`, `&&`, …)
+    // or a leading `.`, `?` or `:` on the next line means it continues.
+    // Without this, a semicolon-free assignment would protect strings in
+    // later statements: `const variant = props.variant ?? "primary"`
+    // followed by `return cn("outline")` on the next line.
+    if (char === '\n' && depth === 0) {
+      let prev = i - 1
+      while (
+        prev >= 0 &&
+        (tail[prev] === ' ' || tail[prev] === '\t' || tail[prev] === '\r' || tail[prev] === '\n')
+      ) {
+        prev--
+      }
+      let next = i + 1
+      while (next < tail.length && (tail[next] === ' ' || tail[next] === '\t' || tail[next] === '\r')) {
+        next++
+      }
+      let continues =
+        prev < 0 ||
+        '?.,:+&|!<>=%~^*/-'.includes(tail[prev]) ||
+        (next < tail.length && '.?:&|+'.includes(tail[next]))
+      if (!continues) return false
       i++
       continue
     }
@@ -396,6 +440,54 @@ const commentRanges = new DefaultMap((source: string) => {
       while (i < source.length && source[i] !== '\n') i++
       ranges.push(start, i)
       continue
+    }
+
+    // Skip regular expression literals: the escaped slash and the
+    // closing slash in `/\\//` are not a comment start. A `/` only opens
+    // a regex in expression position; after an operand (identifier,
+    // number, `)`, `]`, a string) it is division instead. Keywords such
+    // as `return` still take a regex after them.
+    if (char === '/') {
+      let j = i - 1
+      while (j >= 0 && (source[j] === ' ' || source[j] === '\t')) j--
+      let prev = source[j] ?? ''
+      let isRegex = !/[A-Za-z0-9_$)\]}'"`]/.test(prev)
+      if (!isRegex && /[A-Za-z_$]/.test(prev)) {
+        let k = j
+        while (k >= 0 && /[A-Za-z0-9_$]/.test(source[k])) k--
+        let word = source.slice(k + 1, j + 1)
+        isRegex = [
+          'return',
+          'typeof',
+          'case',
+          'in',
+          'of',
+          'new',
+          'delete',
+          'void',
+          'instanceof',
+          'yield',
+          'await',
+        ].includes(word)
+      }
+      if (isRegex) {
+        i++
+        let inClass = false
+        while (i < source.length && source[i] !== '\n') {
+          if (source[i] === '\\') {
+            i += 2
+            continue
+          }
+          if (source[i] === '[') inClass = true
+          else if (source[i] === ']') inClass = false
+          else if (source[i] === '/' && !inClass) {
+            i++
+            break
+          }
+          i++
+        }
+        continue
+      }
     }
 
     // Block comment: runs until the closing `*/`
