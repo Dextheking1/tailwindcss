@@ -150,6 +150,14 @@ describe('is-safe-migration', async () => {
     // A quote inside a comment does not open a string: the `variant`
     // prop after it still protects its values
     ['// Template literals use the ` character.\n<Button variant={active ? "outline" : "ghost"} />', 'outline'],
+
+    // A `variant` value expression can break before a comparison
+    // operator: its strings are still variant names
+    [`<Button variant={size\n > 0 ? "outline" : "ghost"} />`, 'outline'],
+
+    // Dashed candidates inside comments after JSX are not class names
+    ['<div>{/* shadow-sm */}</div>', 'shadow-sm'],
+    ['const node = <div></div>; // use shadow-sm', 'shadow-sm'],
   ])('does not replace classes in invalid positions #%#', async (example, candidate) => {
     expect(
       await migrateCandidate(designSystem, {}, candidate, {
@@ -227,6 +235,10 @@ describe('is-safe-migration', async () => {
       'shadow',
       'shadow-sm',
     ],
+
+    // A quote right after a block comment still opens the string: the
+    // class inside it migrates
+    ['cn(/* note */"outline")', 'outline', 'outline-solid'],
   ])('replaces classes in valid positions #%#', async (example, candidate, expected) => {
     expect(
       await migrateCandidate(designSystem, {}, candidate, {
