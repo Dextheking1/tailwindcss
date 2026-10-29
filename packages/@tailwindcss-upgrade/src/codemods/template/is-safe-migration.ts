@@ -43,6 +43,13 @@ function isInsideStringLiteral(text: string, index: number): boolean {
       continue
     }
 
+    // Skip an escaped character outside a string, e.g. the quote in
+    // `/\"/`, so it does not open a string.
+    if (char === '\\') {
+      i++
+      continue
+    }
+
     // Skip comments: quotes in comment prose do not open strings, e.g.
     // the backtick in `// Template literals use the \` character.`
     // would otherwise swallow the rest of the file as a string. A `//`
@@ -190,7 +197,8 @@ function isInsideVariantValue(prefix: string): boolean {
     // A newline at the top level ends the value, unless the expression
     // continues on the next line: a trailing operator (`?`, `:`, `&&`, …)
     // or a leading operator (`.`, `?`, `:`, `>`, …) on the next line
-    // means it continues.
+    // means it continues. Blank lines left behind by a blanked multiline
+    // comment do not end it either: the operator can sit past them.
     // Without this, a semicolon-free assignment would protect strings in
     // later statements: `const variant = props.variant ?? "primary"`
     // followed by `return cn("outline")` on the next line.
@@ -203,7 +211,10 @@ function isInsideVariantValue(prefix: string): boolean {
         prev--
       }
       let next = i + 1
-      while (next < tail.length && (tail[next] === ' ' || tail[next] === '\t' || tail[next] === '\r')) {
+      while (
+        next < tail.length &&
+        (tail[next] === ' ' || tail[next] === '\t' || tail[next] === '\r' || tail[next] === '\n')
+      ) {
         next++
       }
       let continues =
@@ -499,8 +510,9 @@ const commentRanges = new DefaultMap((source: string) => {
 
     // Skip regular expression literals (block comments are handled
     // above, and `</` followed by a tag name is a JSX closing tag, not a
-    // regex): the escaped slash and the
-    // closing slash in `/\\//` are not a comment start. A `/` only opens
+    // regex; a component name may also start with `_` or `$`). The
+    // escaped slash and the closing slash in `/\\//` are not a comment
+    // start. A `/` only opens
     // a regex in expression position; after an operand (identifier,
     // number, `)`, `]`, a string) it is division instead. Keywords such
     // as `return` still take a regex after them.
@@ -508,7 +520,7 @@ const commentRanges = new DefaultMap((source: string) => {
       let j = i - 1
       while (j >= 0 && (source[j] === ' ' || source[j] === '\t')) j--
       let prev = source[j] ?? ''
-      let isClosingTag = source[i - 1] === '<' && /[A-Za-z>]/.test(source[i + 1] ?? '')
+      let isClosingTag = source[i - 1] === '<' && /[A-Za-z_$>]/.test(source[i + 1] ?? '')
       let isRegex = !isClosingTag && !/[A-Za-z0-9_$)\]}'"`]/.test(prev)
       if (!isRegex && /[A-Za-z_$]/.test(prev)) {
         let k = j
