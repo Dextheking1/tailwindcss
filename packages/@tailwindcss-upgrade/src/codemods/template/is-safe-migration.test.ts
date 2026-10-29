@@ -239,6 +239,18 @@ describe('is-safe-migration', async () => {
     // A quote right after a block comment still opens the string: the
     // class inside it migrates
     ['cn(/* note */"outline")', 'outline', 'outline-solid'],
+
+    // A comment line after a semicolon-free `variant` assignment does
+    // not extend the value: a class in the next statement still migrates
+    [
+      'const variant = props.variant ?? "primary"\n/* Choose the classes below. */\nreturn cn("outline")',
+      'outline',
+      'outline-solid',
+    ],
+
+    // A regex right after a `<` comparison is not a JSX closing tag:
+    // the class after it still migrates
+    ['const match = value</[/*]/.test(input); const classes = "shadow-sm"', 'shadow-sm', 'shadow-xs'],
   ])('replaces classes in valid positions #%#', async (example, candidate, expected) => {
     expect(
       await migrateCandidate(designSystem, {}, candidate, {
